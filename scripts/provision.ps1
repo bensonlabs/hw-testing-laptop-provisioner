@@ -27,6 +27,68 @@ function Get-Soffice {
     return $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 
+function Set-DesktopSavePath([string]$DesktopPath, [string]$ProfilePath) {
+    if (-not $DesktopPath -or -not (Test-Path -LiteralPath $DesktopPath -PathType Container)) {
+        throw "Windows Desktop folder was not found: $DesktopPath"
+    }
+    $desktopUrl = ([uri]($DesktopPath.TrimEnd('\') + '\')).AbsoluteUri
+    $profileDir = Split-Path $ProfilePath -Parent
+    if (-not (Test-Path -LiteralPath $profileDir)) {
+        New-Item -Path $profileDir -ItemType Directory -Force | Out-Null
+    }
+    $registry = [System.Xml.XmlDocument]::new()
+    $registry.PreserveWhitespace = $true
+    $oor = 'http://openoffice.org/2001/registry'
+    if (Test-Path -LiteralPath $ProfilePath) {
+        $registry.Load($ProfilePath)
+    } else {
+        $registry.LoadXml('<oor:items xmlns:oor="http://openoffice.org/2001/registry"/>')
+    }
+    if ($registry.DocumentElement.LocalName -ne 'items' -or $registry.DocumentElement.NamespaceURI -ne $oor) {
+        throw "Unexpected LibreOffice profile format: $ProfilePath"
+    }
+    $workPath = "/org.openoffice.Office.Paths/Paths/org.openoffice.Office.Paths:NamedPath['Work']"
+    # Remove only the existing Work/WritePath override; retain every other preference.
+    foreach ($item in @($registry.DocumentElement.ChildNodes)) {
+        if ($item.LocalName -eq 'item' -and $item.GetAttribute('path', $oor) -in @($workPath, '/org.openoffice.Office.Paths/Paths/Work')) {
+            foreach ($prop in @($item.ChildNodes)) {
+                if ($prop.LocalName -eq 'prop' -and $prop.GetAttribute('name', $oor) -eq 'WritePath') {
+                    $item.RemoveChild($prop) | Out-Null
+                }
+            }
+            if (-not $item.SelectSingleNode('*')) {
+                $registry.DocumentElement.RemoveChild($item) | Out-Null
+            }
+        }
+    }
+    $item = $registry.CreateElement('item')
+    $item.SetAttribute('path', $oor, $workPath) | Out-Null
+    $prop = $registry.CreateElement('prop')
+    $prop.SetAttribute('name', $oor, 'WritePath') | Out-Null
+    $prop.SetAttribute('op', $oor, 'fuse') | Out-Null
+    $value = $registry.CreateElement('value')
+    $value.InnerText = $desktopUrl
+    $prop.AppendChild($value) | Out-Null
+    $item.AppendChild($prop) | Out-Null
+    $registry.DocumentElement.AppendChild($item) | Out-Null
+    if (Test-Path -LiteralPath $ProfilePath) {
+        Copy-Item -LiteralPath $ProfilePath -Destination ($ProfilePath + '.hw-testing.bak') -Force
+    }
+    $registry.Save($ProfilePath)
+    $check = [System.Xml.XmlDocument]::new()
+    $check.Load($ProfilePath)
+    $ns = [System.Xml.XmlNamespaceManager]::new($check.NameTable)
+    $ns.AddNamespace('oor', $oor)
+    # Check the targeted Work entry rather than an unrelated path preference.
+    $saved = @($check.DocumentElement.ChildNodes | Where-Object {
+        $_.LocalName -eq 'item' -and $_.GetAttribute('path', $oor) -eq $workPath
+    })[0].SelectSingleNode('prop[@oor:name="WritePath"]/value', $ns)
+    if (-not $saved -or $saved.InnerText -ne $desktopUrl) {
+        throw 'Desktop save folder profile verification failed.'
+    }
+    Pass "Default save folder set for $env:USERNAME : $DesktopPath"
+}
+
 Write-Log ('=' * 72)
 Write-Log 'HW TESTING LAPTOP PROVISIONER'
 Write-Log "Computer: $env:COMPUTERNAME"
@@ -128,10 +190,16 @@ if ($filter -and $filter.InnerText -eq 'Office Open XML Text') {
 
 $savePath = $verify.SelectSingleNode('/oor:data/oor:component-data[@oor:name="Paths"]/node[@oor:name="Paths"]/node[@oor:name="Work"]/prop[@oor:name="WritePath"]/value', $ns)
 if ($savePath -and $savePath.InnerText -eq '$(home)/../Desktop') {
-    Pass 'Default save folder configuration is the current user Desktop'
+    Pass 'Machine-wide Desktop fallback configuration written'
 } else {
     Fail 'Desktop default save folder configuration verification failed'
 }
+
+# Use Windows' actual Desktop location, including folder redirection.
+# Run under the local account that will be used for testing.
+$desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
+$userConfig = Join-Path $env:APPDATA 'LibreOffice\4\user\registrymodifications.xcu'
+Set-DesktopSavePath -DesktopPath $desktop -ProfilePath $userConfig
 
 try {
     $console = Join-Path (Split-Path $soffice -Parent) 'soffice.com'

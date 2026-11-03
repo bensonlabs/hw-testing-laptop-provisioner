@@ -24,7 +24,7 @@ Use `-DryRun` to inspect the plan without making changes.
 
 ## Important scope
 
-LibreOffice defaults are applied machine-wide using `share\registry\hw-testing-laptop.xcd`. Existing per-user preferences or document templates may override these defaults, so perform the manual checks from the actual testing account. Existing user profiles are preserved.
+LibreOffice defaults are applied machine-wide using `share\registry\hw-testing-laptop.xcd`. Existing per-user preferences or document templates may override these defaults, so perform the manual checks from the actual testing account. Existing user profiles are preserved except for the requested default save-folder setting. That setting is updated in the current account's `registrymodifications.xcu`, using Windows' actual Desktop location. A `.hw-testing.bak` copy is saved before changing an existing profile. Run the provisioner under the same Windows account that will be used for testing, elevating that account's PowerShell session.
 
 Requires winget. Close LibreOffice before running or rerunning the script. An existing installation is reused without upgrading. The script checks the configuration payload and LibreOffice console startup; confirm the actual Writer font and save behavior manually before handoff.
 
@@ -32,4 +32,4 @@ After all automated checks pass, open Writer in the testing account, confirm Ari
 
 The BIOS wireless-radio step is intentionally manual and is not automated by this repository.
 
-The save folder setting is shared by LibreOffice applications, including Writer. It uses `$(home)/../Desktop`, which resolves from each user's Documents folder to their Desktop on the stock Windows profiles targeted here. If Documents has been redirected (for example by OneDrive), verify the save location manually before handoff.
+The save folder setting is shared by LibreOffice applications, including Writer. The current account receives an explicit Desktop file URL so it does not depend on relative Documents paths or an existing user save-folder preference. Other accounts receive the machine-wide `$(home)/../Desktop` fallback for stock Windows profiles. Run provisioning in each testing account if necessary. LibreOffice can still remember folders chosen during later use; validate with a new document after restarting Writer.
